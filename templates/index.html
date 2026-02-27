@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AI Study Buddy - Universal Mode</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div class="container">
+    <h1>📚 AI Study Buddy</h1>
+    
+    <div class="input-group">
+        <input type="text" id="name" placeholder="👤 Student Name">
+        <select id="languageSelect">
+            <option value="English" data-code="en-IN">English (India)</option>
+            <option value="Telugu" data-code="te-IN">Telugu (తెలుగు)</option>
+            <option value="Hindi" data-code="hi-IN">Hindi (हिन्दी)</option>
+            <option value="Tamil" data-code="ta-IN">Tamil (தமிழ்)</option>
+            <option value="Kannada" data-code="kn-IN">Kannada (ಕನ್ನಡ)</option>
+        </select>
+        <input type="text" id="topic" placeholder="🔍 Topic (e.g. Java OOPs, Physics)">
+    </div>
+
+    <div class="btn-grid">
+        <button class="voice-btn" onclick="startVoiceInput()">🎤 Speak Topic</button>
+        <button onclick="handleRequest('/explain')">💡 Explain</button>
+        <button onclick="handleRequest('/questions')">📝 Practice (20 Qs)</button>
+        <button onclick="saveProgress()">💾 Save Progress</button>
+        <button class="history-btn" onclick="viewProgress()">📊 View History</button>
+        <button id="showAnswerBtn" class="answer-btn" onclick="revealAnswers()">✅ Show Answers</button>
+        <button class="stop-btn" onclick="stopVoice()">🛑 Stop Voice</button>
+    </div>
+
+    <div id="output">Hey..! Ready to Level Up...?</div>
+</div>
+
+<script>
+let savedAnswers = ""; 
+
+function getLangCode() { 
+    return document.getElementById("languageSelect").selectedOptions[0].getAttribute("data-code"); 
+}
+
+function speak(text) {
+    window.speechSynthesis.cancel();
+    const cleanText = text.replace(/[*#|]/g, "");
+    const utter = new SpeechSynthesisUtterance(cleanText);
+    const langCode = getLangCode();
+    utter.lang = langCode;
+    
+    const voices = window.speechSynthesis.getVoices();
+    const matchingVoice = voices.find(v => v.lang.includes(langCode) || v.lang.includes(langCode.split('-')[0]));
+    if (matchingVoice) utter.voice = matchingVoice;
+
+    utter.rate = 0.95;
+    utter.pitch = 1.0;
+    window.speechSynthesis.speak(utter);
+}
+
+function stopVoice() { window.speechSynthesis.cancel(); }
+
+function startVoiceInput() {
+    const rec = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+    rec.lang = getLangCode();
+    rec.start();
+    rec.onresult = (e) => { document.getElementById("topic").value = e.results[0][0].transcript; };
+}
+
+function formatText(text) {
+    let html = text.replace(/\*\*(.*?)\*\*/g, "<b>$1</b>");
+    html = html.replace(/^(.*?):/gm, "<b>$1:</b>");
+    const lines = html.split('\n');
+    let inList = false;
+    let finalHtml = "";
+    
+    lines.forEach(line => {
+        if (line.trim().match(/^[\-\*\d\.]+\s+/)) {
+            if (!inList) { finalHtml += "<ul>"; inList = true; }
+            finalHtml += `<li>${line.replace(/^[\-\*\d\.]+\s+/, "")}</li>`;
+        } else if (line.trim() !== "") {
+            if (inList) { finalHtml += "</ul>"; inList = false; }
+            finalHtml += `<p>${line}</p>`;
+        }
+    });
+    if (inList) finalHtml += "</ul>";
+    return finalHtml;
+}
+
+async function handleRequest(endpoint) {
+    const topic = document.getElementById("topic").value;
+    const lang = document.getElementById("languageSelect").value;
+    const output = document.getElementById("output");
+    const ansBtn = document.getElementById("showAnswerBtn");
+
+    if (!topic) return alert("Please enter a topic first!");
+    
+    output.innerHTML = "✨ <b> Professor analyzing 20 questions...</b>";
+    ansBtn.style.display = "none";
+    stopVoice();
+
+    try {
+        const res = await fetch(endpoint, { 
+            method: "POST", 
+            headers: {"Content-Type": "application/json"}, 
+            body: JSON.stringify({topic: topic, language: lang}) 
+        });
+        const data = await res.json();
+        
+        if (endpoint === '/questions' && data.response.includes('|||')) {
+            const parts = data.response.split('|||'); 
+            output.innerHTML = formatText(parts[0]);  
+            savedAnswers = parts[1];                  
+            ansBtn.style.display = "block";           
+            speak("I have generated 20 technical questions. Try them first!");
+        } else {
+            output.innerHTML = formatText(data.response);
+            if (endpoint === '/explain') speak(data.response);
+        }
+    } catch (err) {
+        output.innerHTML = "<b>❌ Connection Error. Check backend.</b>";
+    }
+}
+
+function revealAnswers() {
+    const output = document.getElementById("output");
+    output.innerHTML += "<hr><h3>✅ Detailed Answers:</h3>" + formatText(savedAnswers);
+    speak("Here are the answers.");
+    speak(savedAnswers); 
+    document.getElementById("showAnswerBtn").style.display = "none";
+}
+
+window.speechSynthesis.onvoiceschanged = () => { window.speechSynthesis.getVoices(); };
+
+async function saveProgress() {
+    const name = document.getElementById("name").value;
+    const topic = document.getElementById("topic").value;
+    if(!name || !topic) return alert("Enter Name and Topic!");
+    const res = await fetch("/save", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name: name, topic: topic}) });
+    const d = await res.json(); alert(d.message);
+}
+
+async function viewProgress() {
+    const name = document.getElementById("name").value;
+    if(!name) return alert("Enter your name!");
+    const res = await fetch("/progress/" + name);
+    const d = await res.json();
+    const output = document.getElementById("output");
+    if (!d.progress || d.progress.length === 0) { output.innerHTML = "📭 No study history."; return; }
+    let html = "<div style='overflow-x:auto;'><table><tr><th>📚 Topic</th><th>📅 Date</th></tr>";
+    d.progress.forEach(r => { html += `<tr><td>${r.topic}</td><td>${r.date}</td></tr>`; });
+    output.innerHTML = html + "</table></div>";
+}
+</script>
+</body>
+</html>
